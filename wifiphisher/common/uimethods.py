@@ -1,6 +1,7 @@
-import constants
 import importlib
 from functools import wraps
+
+import wifiphisher.common.constants
 
 
 def uimethod(func):

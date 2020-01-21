@@ -3,15 +3,18 @@ This module was made to handle the curses sections for the ap selection,
 template selection and the main window
 """
 
+import curses
 import os
-import time
 import re
+import time
 from collections import namedtuple
 from subprocess import check_output
-import curses
+
+import wifiphisher.common.accesspoint as accesspoint
 import wifiphisher.common.constants as constants
-import wifiphisher.common.recon as recon
 import wifiphisher.common.phishingpage as phishingpage
+import wifiphisher.common.recon as recon
+import wifiphisher.common.victim as victim
 
 # information for the main terminal
 MainInfo = namedtuple("MainInfo", constants.MAIN_TUI_ATTRS)
@@ -185,8 +188,7 @@ class TuiTemplateSelection(object):
             display_str = "Options: [Up Arrow] Move Up  [Down Arrow] Move Down"
             screen.addstr(0, 0, display_string(max_window_len, display_str))
             display_str = "Available Phishing Scenarios:"
-            screen.addstr(3, 0,
-                          display_string(max_window_len, display_str),
+            screen.addstr(3, 0, display_string(max_window_len, display_str),
                           curses.A_BOLD)
         except curses.error:
             return 0
@@ -641,7 +643,7 @@ class TuiApSel(object):
 
         # check if any new access points have been discovered
         new_total_ap_number = len(
-            self.access_point_finder.get_all_access_points())
+            self.access_point_finder.observed_access_points)
 
         if new_total_ap_number != self.total_ap_number:
             self.access_points = self.access_point_finder.\
@@ -658,7 +660,7 @@ class TuiApSel(object):
         if ap_info.key == ord("\n") and self.total_ap_number != 0:
             # show message and exit
             screen.addstr(ap_info.max_h - 2, 3, "YOU HAVE SELECTED " +
-                          self.access_points[ap_info.pos - 1].get_name())
+                          self.access_points[ap_info.pos - 1].name)
             screen.refresh()
             time.sleep(1)
             is_apsel_end = True
@@ -703,10 +705,10 @@ class TuiApSel(object):
         """
 
         # get the page boundary
-        page_boundary = range(1 + (ap_info.max_row *
+        page_boundary = list(range(1 + (ap_info.max_row *
                                    (ap_info.page_number - 1)),
                               ap_info.max_row + 1 +
-                              (ap_info.max_row * (ap_info.page_number - 1)))
+                              (ap_info.max_row * (ap_info.page_number - 1))))
 
         # remove previous content and draw border
         ap_info.box.erase()
@@ -743,18 +745,16 @@ class TuiApSel(object):
                 # get the access point and it's vendor
                 access_point = self.access_points[item_position - 1]
                 vendor = self.mac_matcher.get_vendor_name(
-                    access_point.get_mac_address())
+                    access_point.mac_address)
 
                 # the display format for showing access points
                 display_text = ((
-                    "{0:30} {1:17} {2:2} {3:3}% {4:^7} {5:^5}"
+                    "{0:30} {1:17} {2:2} {3:3}% {4:^8} {5:^5}"
                     " {6:20}").format(
-                        access_point.get_name(),
-                        access_point.get_mac_address(),
-                        access_point.get_channel(),
-                        access_point.get_signal_strength(),
-                        access_point.get_encryption(),
-                        access_point.get_number_connected_clients(), vendor))
+                        access_point.name, access_point.mac_address,
+                        access_point.channel, access_point.signal_strength,
+                        access_point.encryption,
+                        access_point.client_count, vendor))
                 # shows whether the access point should be highlighted or not
                 # based on our current position
                 print_row_number = item_position - ap_info.max_row * (
@@ -825,8 +825,10 @@ class TuiMain(object):
         screen.nodelay(True)
         curses.init_pair(1, curses.COLOR_BLUE, screen.getbkgd())
         curses.init_pair(2, curses.COLOR_YELLOW, screen.getbkgd())
+        curses.init_pair(3, curses.COLOR_RED, screen.getbkgd())
         self.blue_text = curses.color_pair(1) | curses.A_BOLD
         self.yellow_text = curses.color_pair(2) | curses.A_BOLD
+        self.red_text = curses.color_pair(3) | curses.A_BOLD
 
         while True:
             # catch the exception when screen size is smaller than
@@ -850,7 +852,7 @@ class TuiMain(object):
         match_str = r"(.*\s)(request from\s)(.*)(\sfor|with\s)(.*)"
         for request in requests:
             # match the information from the input string
-            match = re.match(match_str, request)
+            match = re.match(match_str, request.decode('utf-8'))
             if match is None:
                 continue
 
@@ -908,6 +910,10 @@ class TuiMain(object):
         :rtype: bool
         """
 
+        # Get accesspoint instance and read victims from file
+        accesspoint_instance = accesspoint.AccessPoint.get_instance()
+        accesspoint_instance.read_connected_victims_file()
+
         is_done = False
         screen.erase()
 
@@ -942,14 +948,16 @@ class TuiMain(object):
                 screen.addstr(raw_num, 0, client)
                 raw_num += 1
         try:
-            # print the dhcp lease section
-            screen.addstr(7, 0, "DHCP Leases: ", self.blue_text)
-            if os.path.isfile('/var/lib/misc/dnsmasq.leases'):
-                dnsmasq_output = check_output(
-                    ['head', '-5', '/var/lib/misc/dnsmasq.leases'])
-                screen.addstr(8, 0, dnsmasq_output)
-
-            # print the http request section
+            # Print the connected victims section
+            screen.addstr(7, 0, "Connected Victims: ", self.blue_text)
+            victims_instance = victim.Victims.get_instance()
+            vict_dic = victims_instance.get_print_representation()
+            row_counter = 8
+            for key in vict_dic:
+                screen.addstr(row_counter, 0, key, self.red_text)
+                screen.addstr(row_counter, 22, vict_dic[key])
+                row_counter += 1
+            # Print the http request section
             screen.addstr(13, 0, "HTTP requests: ", self.blue_text)
             if os.path.isfile('/tmp/wifiphisher-webserver.tmp'):
                 http_output = check_output(
@@ -996,4 +1004,4 @@ def line_splitter(num_of_words, line):
     """
     pieces = line.split()
     return (" ".join(pieces[i:i + num_of_words])
-            for i in xrange(0, len(pieces), num_of_words))
+            for i in range(0, len(pieces), num_of_words))

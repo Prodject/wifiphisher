@@ -1,3 +1,5 @@
+# pylint: skip-file
+# FIXME Pylint complains about EAPOL.
 """
 Extension that capture the four way handshake and
 do the verification whether the password given by
@@ -5,20 +7,29 @@ do the verification whether the password given by
 """
 
 import binascii
-import hmac
 import hashlib
+import hmac
 import logging
-from collections import deque
-from collections import defaultdict
-from pbkdf2 import PBKDF2
+from collections import defaultdict, deque
+
 import scapy.layers.dot11 as dot11
 import wifiphisher.common.constants as constants
 import wifiphisher.common.extensions as extensions
+from pbkdf2 import PBKDF2
+from scapy.all import rdpcap
 
 logger = logging.getLogger(__name__)
 
 # define the verification state
-DONE, FAIL, NOT_YET = range(3)
+DONE, FAIL, NOT_YET = list(range(3))
+
+# backward compatible for scapy EAPOL
+try:
+    EAPOL = dot11.EAPOL
+except AttributeError:
+    # incase scapy version >= 2.4.0
+    import scapy.layers.eap as eap
+    EAPOL = eap.EAPOL
 
 
 def is_valid_handshake_capture(handshake_path):
@@ -29,14 +40,14 @@ def is_valid_handshake_capture(handshake_path):
     :return: None
     :rtype: None
     """
-    pkts = dot11.rdpcap(handshake_path)
+    pkts = rdpcap(handshake_path)
     eapols = []
     # get all the KEY type EAPOLs
     for pkt in pkts:
         # pkt is Dot11 and is not retried frame
         if pkt.haslayer(dot11.Dot11) and not pkt.FCfield & (1 << 3):
             # pkt is EAPOL and KEY type
-            if pkt.haslayer(dot11.EAPOL) and pkt[dot11.EAPOL].type == 3:
+            if pkt.haslayer(EAPOL) and pkt[EAPOL].type == 3:
                 eapols.append(pkt)
 
     num_of_frames = len(eapols)
@@ -94,6 +105,8 @@ class Handshakeverify(object):
         self._is_first = True
         # channel map to frame list
         self._packets_to_send = defaultdict(list)
+        # correct captured password
+        self._correct_password = None
 
     @staticmethod
     def _prf512(key, const_a, const_b):
@@ -159,9 +172,9 @@ class Handshakeverify(object):
             key_version = 1 if ord(msg4.load[2]) & 7 else 0
 
             # start to construct the buffer for calculating the MIC
-            msg4_data = format(msg4[dot11.EAPOL].version, '02x') +\
-                format(msg4[dot11.EAPOL].type, '02x') +\
-                format(msg4[dot11.EAPOL].len, '04x')
+            msg4_data = format(msg4[EAPOL].version, '02x') +\
+                format(msg4[EAPOL].type, '02x') +\
+                format(msg4[EAPOL].len, '04x')
             msg4_data += binascii.b2a_hex(msg4.load)[:154]
             msg4_data += "00" * 18
             msg4_data = binascii.a2b_hex(msg4_data)
@@ -177,6 +190,7 @@ class Handshakeverify(object):
 
             msg4_mic_cmp = binascii.b2a_hex(msg4.load[-18:-2])
             if msg4_mic_cmp == msg4_mic_cal:
+                self._correct_password = passphrase
                 return DONE
             return FAIL
         except IndexError:
@@ -196,7 +210,7 @@ class Handshakeverify(object):
         # pkt is Dot11 nad packet is not retried
         if packet.haslayer(dot11.Dot11) and not packet.FCfield & (1 << 3):
             # check it is key type eapol
-            if packet.haslayer(dot11.EAPOL) and packet[dot11.EAPOL].type == 3:
+            if packet.haslayer(EAPOL) and packet[EAPOL].type == 3:
                 return True
         return False
 
@@ -272,7 +286,7 @@ class Handshakeverify(object):
 
         # append the capture of user first:
         if self._is_first and self._data.args.handshake_capture:
-            pkts = dot11.rdpcap(self._data.args.handshake_capture)
+            pkts = rdpcap(self._data.args.handshake_capture)
             for pkt in pkts:
                 if self.is_valid_handshake_frame(pkt):
                     self._eapols.append(pkt)
@@ -286,7 +300,7 @@ class Handshakeverify(object):
 
         num_of_frames = len(self._eapols)
         for index in range(num_of_frames):
-            if num_of_frames - index > 3:
+            if num_of_frames - index > 3 and index + 3 <= len(self._eapols):
                 ap_bssid = self._data.target_ap_bssid
                 # from AP to STA
                 msg1 = self._eapols[index]
@@ -328,7 +342,7 @@ class Handshakeverify(object):
             ret_info = ["PSK Captured - " + pw_str + " Wait for credential"]
         # passphrase correct
         elif self._is_captured and self._is_done == DONE:
-            ret_info = ["PSK Captured - " + pw_str + " correct"]
+            ret_info = ["PSK Captured - " + pw_str + " correct: " + self._correct_password]
         else:
             ret_info = ["WAIT for HANDSHAKE"]
         return ret_info

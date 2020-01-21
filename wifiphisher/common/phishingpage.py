@@ -3,10 +3,17 @@ This module handles all the phishing related operations for
 Wifiphisher.py
 """
 
+
 import os
-import ConfigParser
 from shutil import copyfile
+
 import wifiphisher.common.constants as constants
+
+try:
+    from configparser import ConfigParser, RawConfigParser
+except ImportError:
+    from configparser import ConfigParser, RawConfigParser
+
 
 
 def config_section_map(config_file, section):
@@ -14,7 +21,7 @@ def config_section_map(config_file, section):
     Map the values of a config file to a dictionary.
     """
 
-    config = ConfigParser.ConfigParser()
+    config = ConfigParser()
     config.read(config_file)
     dict1 = {}
 
@@ -54,7 +61,7 @@ class PhishingTemplate(object):
 
         # setup all the variables
 
-        config_path = os.path.join(constants.PHISHING_PAGES_DIR, name,
+        config_path = os.path.join(constants.phishing_pages_dir, name,
                                    'config.ini')
         info = config_section_map(config_path, 'info')
 
@@ -62,16 +69,18 @@ class PhishingTemplate(object):
         self._display_name = info['name']
         self._description = info['description']
         self._payload = False
-        self._config_path = os.path.join(constants.PHISHING_PAGES_DIR,
-                                   self._name, 'config.ini')
+        self._config_path = os.path.join(constants.phishing_pages_dir,
+                                         self._name, 'config.ini')
         if 'payloadpath' in info:
             self._payload = info['payloadpath']
 
-        # TODO: Use os.path.join instead
-        self._path = constants.PHISHING_PAGES_DIR +\
-            self._name.lower() + "/" + constants.SCENARIO_HTML_DIR
-        self._path_static = constants.PHISHING_PAGES_DIR +\
-            self._name.lower() + "/" + constants.SCENARIO_HTML_DIR + "/static/"
+        self._path = os.path.join(constants.phishing_pages_dir,
+                                  self._name.lower(),
+                                  constants.SCENARIO_HTML_DIR)
+        self._path_static = os.path.join(constants.phishing_pages_dir,
+                                         self._name.lower(),
+                                         constants.SCENARIO_HTML_DIR,
+                                         'static')
 
         self._context = config_section_map(config_path, 'context')
         self._extra_files = []
@@ -91,11 +100,11 @@ class PhishingTemplate(object):
         :rtype: None
         """
 
-        original_config = ConfigParser.ConfigParser()
+        original_config = ConfigParser()
         original_config.read(config_path)
 
         # new config file object
-        config = ConfigParser.RawConfigParser()
+        config = RawConfigParser()
 
         # update the info section
         config.add_section('info')
@@ -283,25 +292,28 @@ class PhishingTemplate(object):
 class TemplateManager(object):
     """ This class handles all the template management operations """
 
-    def __init__(self):
+    def __init__(self, data_pages=None):
         """
         Construct object.
 
         :param self: A TemplateManager object
+        :param data_pages: The directory containing the templates
         :type self: TemplateManager
         :return: None
         :rtype: None
         """
 
         # setup the templates
-        self._template_directory = constants.PHISHING_PAGES_DIR
+        self._template_directory = data_pages or constants.phishing_pages_dir
+        if data_pages:
+            constants.phishing_pages_dir = data_pages
 
-        page_dirs = os.listdir(constants.PHISHING_PAGES_DIR)
+        page_dirs = os.listdir(self._template_directory)
 
         self._templates = {}
 
         for page in page_dirs:
-            if os.path.isdir(page):
+            if os.path.isdir(page) and self.is_valid_template(page)[0]:
                 self._templates[page] = PhishingTemplate(page)
 
         # add all the user templates to the database
@@ -329,21 +341,25 @@ class TemplateManager(object):
         :rtype: tuple
         """
 
+        html = False
         dir_path = os.path.join(self._template_directory, name)
-        tdir = os.listdir(os.path.join(dir_path, constants.SCENARIO_HTML_DIR))
+        # check config file...
+        if not "config.ini" in os.listdir(dir_path):
+            return False, "Configuration file not found in: "
+        try:
+            tdir = os.listdir(os.path.join(dir_path, constants.SCENARIO_HTML_DIR))
+        except OSError:
+            return False, "No " + constants.SCENARIO_HTML_DIR + " directory found in: "
         # Check HTML files...
         for tfile in tdir:
             if tfile.endswith(".html"):
                 html = True
                 break
         if not html:
-            return False, "No HTML files found in: " 
-        # check config file...
-        if not "config.ini" in os.listdir(dir_path):
-                return False, "Configuration file not found in: "
+            return False, "No HTML files found in: "
         # and if we found them all return true and template directory name
         return True, name
-      
+
     def find_user_templates(self):
         """
         Return all the user's templates available.
@@ -371,7 +387,7 @@ class TemplateManager(object):
                 else:
                     # TODO: We should throw an exception instead here.
                     # but if not then display which problem occurred
-                    print "[" + constants.R + "!" + constants.W + "] " + output + name
+                    print("[" + constants.R + "!" + constants.W + "] " + output + name)
 
         return local_templates
 
@@ -394,6 +410,10 @@ class TemplateManager(object):
             local_template = PhishingTemplate(template)
             self._templates[template] = local_template
 
+    @property
+    def template_directory(self):
+        return self._template_directory
+
     def on_exit(self):
         """
         Delete any extra files on exit
@@ -404,5 +424,5 @@ class TemplateManager(object):
         :rtype: None
         """
 
-        for templ_obj in self._templates.values():
+        for templ_obj in list(self._templates.values()):
             templ_obj.remove_extra_files()

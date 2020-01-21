@@ -2,15 +2,17 @@
 All logic regarding extensions management
 """
 
-import time
-import importlib
-import threading
-import logging
 import collections
+import importlib
+import logging
+import threading
+import time
 from collections import defaultdict
-import scapy.layers.dot11 as dot11
+
 import scapy.arch.linux as linux
+import scapy.layers.dot11 as dot11
 import wifiphisher.common.constants as constants
+import wifiphisher.common.globals as universal
 import wifiphisher.extensions.deauth as deauth_extension
 
 logger = logging.getLogger(__name__)
@@ -211,7 +213,7 @@ class ExtensionManager(object):
 
         # Convert shared_data from dict to named tuple
         shared_data = collections.namedtuple('GenericDict',
-                                             shared_data.keys())(**shared_data)
+                                             list(shared_data.keys()))(**shared_data)
         self._shared_data = shared_data
 
         # Initialize all extensions with the shared data
@@ -331,7 +333,7 @@ class ExtensionManager(object):
         # clear the _packets_to_send on every run of the
         # sniffed frame
         self._packets_to_send = defaultdict(list)
-        channels = [str(ch) for ch in constants.ALL_2G_CHANNELS] + ["*"]
+        channels = [str(ch) for ch in universal.ALL_2G_CHANNELS] + ["*"]
         for extension in self._extensions:
             ext_pkts = extension.get_packet(pkt)
             for channel in channels:
